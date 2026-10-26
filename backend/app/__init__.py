@@ -1,0 +1,1 @@
+"""Backend del Prescriptor NDVI."""
