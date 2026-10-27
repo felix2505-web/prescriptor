@@ -330,5 +330,7 @@
 
   document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', iniciar) : iniciar();
 
-  window.PrescriptorIndice = { get: () => actual, lista: INDICES.map(i => i.id) };
+  window.PrescriptorIndice = { get: () => actual, lista: INDICES.map(i => i.id), info: id => INDICES.find(i => i.id === id) };
+  // Logo con texto oscuro, para documentos de fondo blanco (cotizaciones, certificados)
+  window.PrescriptorLogo = () => LOGOS.oscuro || LOGOS.claro || '';
 })();

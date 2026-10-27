@@ -417,5 +417,17 @@
   }
   document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', iniciar) : iniciar();
 
-  window.PrescriptorZonas = { disolver, manchasDe, crear, estado: () => estado };
+  // Archivos de todas las manchas (para el paquete completo del Agras)
+  async function archivosManchas(carpeta = '') {
+    await crear();
+    if (!estado || !estado.manchas.length) return [];
+    const files = [];
+    for (const m of estado.manchas) {
+      const nom = nombreMancha(m);
+      files.push(...escribirShp(carpeta + 'tasa' + m.tasa + '/' + nom, m.polys.map(r => ({ rings: r, props: propsMancha(m) })), CAMPOS));
+    }
+    return files;
+  }
+
+  window.PrescriptorZonas = { disolver, manchasDe, crear, estado: () => estado, archivosManchas, zip, escribirShp, hectareas };
 })();
