@@ -167,7 +167,7 @@ globalThis.PC = globalThis.PC || (() => {
     try { sessionStorage.setItem(SK, JSON.stringify({ k: PC.b64e(dek), fid: P.fid, iv: P.iv, e: entry })); } catch (e) {}
     window.__PRESC_AUTH = { src: html, template: TEMPLATE, payload: P, entry, user: user || entry.u, role: entry.role, dek, activationsKey: AK };
     // Ajustes (logo, selector de índice) y asistente IA: se agregan a la app descifrada sin modificar la app cifrada
-    const EXTRA = ['plataforma.js?v=4', 'zonas.js?v=2', 'asistente.js?v=1']
+    const EXTRA = ['plataforma.js?v=5', 'zonas.js?v=2', 'asistente.js?v=1']
       .filter(f => !html.includes(f.split('?')[0]))
       .map(f => '<script src="' + f + '"><\/script>').join('');
     const out = !EXTRA ? html : (/<\/body>/i.test(html) ? html.replace(/<\/body>(?![\s\S]*<\/body>)/i, EXTRA + '</body>') : html + EXTRA);

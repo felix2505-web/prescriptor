@@ -105,7 +105,100 @@
   function prepararInforme(h) {
     h = cambiar(h);
     if (LOGOS.claro && LOGOS.oscuro) h = h.split(LOGOS.claro).join(LOGOS.oscuro);
+    try { h = comparacionGrande(h); } catch (e) { console.error('Comparación del informe:', e); }
     return h;
+  }
+
+  // ---------- Informe: comparación del vuelo en grande y % por tasa ----------
+  // Antes de generar el informe se leen los cuadros (exportación «Cuadros .geojson» de la app, sin descargarla)
+  let cuadrosInforme = null;
+  function leerCuadrosSync() {
+    const btn = $('geojsonBtn'); if (!btn) return null;
+    let datos = null;
+    const B = window.Blob, clic = HTMLAnchorElement.prototype.click;
+    window.Blob = class extends B { constructor(p, o) { super(p, o); if (datos === null && Array.isArray(p) && typeof p[0] === 'string') datos = p[0]; } };
+    HTMLAnchorElement.prototype.click = function () { if (this.download && /^blob:/.test(this.href)) return; return clic.call(this); };
+    try { btn.click(); } finally { window.Blob = B; HTMLAnchorElement.prototype.click = clic; }
+    try { return datos ? JSON.parse(datos) : null; } catch (e) { return null; }
+  }
+  function prepararDatosInforme() { cuadrosInforme = leerCuadrosSync(); }
+
+  const COL_TASA = { 2: ['#c8402f', '#2f8a50'], 3: ['#c8402f', '#e6c13d', '#2f8a50'], 4: ['#c8402f', '#ec8d48', '#9dc85a', '#2f8a50'], 5: ['#c8402f', '#ec8d48', '#e6c13d', '#9dc85a', '#2f8a50'] };
+  const pct1 = v => v.toLocaleString('es-CL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' %';
+
+  // Porcentajes con 1 decimal que suman exactamente 100 (método del mayor resto)
+  function porcentajes(cuentas) {
+    const tot = cuentas.reduce((t, c) => t + c, 0);
+    if (!tot) return cuentas.map(() => 0);
+    const exactos = cuentas.map(c => c * 1000 / tot), base = exactos.map(Math.floor);
+    let falta = 1000 - base.reduce((t, v) => t + v, 0);
+    exactos.map((v, i) => [v - base[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (falta > 0) { base[i]++; falta--; } });
+    return base.map(v => v / 10);
+  }
+
+  // Cuadros por dosis (más «No aplicar»), ordenados de mayor a menor dosis como en la leyenda
+  function resumenTasas() {
+    const fc = cuadrosInforme; if (!fc || !fc.features) return null;
+    const grupos = new Map(); let nClases = 2;
+    for (const f of fc.features) {
+      const p = f.properties || {};
+      const k = p.clase ? String(Math.round(+p.dosis_lha || 0)) : 'NA';
+      if (!grupos.has(k)) grupos.set(k, { dosis: p.clase ? Math.round(+p.dosis_lha || 0) : null, clase: p.clase || 0, n: 0 });
+      grupos.get(k).n++; nClases = Math.max(nClases, p.clase || 0);
+    }
+    const lista = [...grupos.values()].sort((a, b) => (b.dosis ?? -1) - (a.dosis ?? -1));
+    const pc = porcentajes(lista.map(g => g.n));
+    lista.forEach((g, i) => { g.pct = pc[i]; g.color = g.clase ? (COL_TASA[nClases] || COL_TASA[5])[g.clase - 1] : null; });
+    return lista;
+  }
+
+  function comparacionGrande(html) {
+    if (!/class="cmp"/.test(html)) return html;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const cmp = doc.querySelector('.cmp'); if (!cmp) return html;
+    const sec = cmp.closest('section') || cmp.parentElement;
+    sec.classList.add('cmp-sec');
+    const figs = [...cmp.querySelectorAll(':scope > figure')];
+    figs.forEach((f, i) => f.classList.add('cmp-fig', 'cmp-fig-' + (i + 1)));
+
+    // Leyenda de la prescripción con el % de cada tasa y de «No aplicar»
+    const rx = figs.find(f => /prescrip/i.test((f.querySelector('.ct') || {}).textContent || '')) || figs[2];
+    const tasas = resumenTasas();
+    if (rx && tasas && tasas.length) {
+      let cap = rx.querySelector('figcaption');
+      if (!cap) { cap = doc.createElement('figcaption'); rx.appendChild(cap); }
+      const tot = tasas.reduce((t, g) => t + g.n, 0);
+      cap.innerHTML = '<div class="rx-leg">' + tasas.map(g =>
+        '<span class="rx-it"><i' + (g.color ? ' style="background:' + g.color + '"' : ' class="na"') + '></i>' +
+        '<b>' + (g.dosis != null ? g.dosis + ' L/ha' : 'No aplicar') + '</b><em>' + pct1(g.pct) + '</em></span>').join('') +
+        '</div><div class="rx-bar">' + tasas.filter(g => g.pct > 0).map(g =>
+        '<span style="flex:' + g.pct + ';' + (g.color ? 'background:' + g.color : '') + '"' + (g.color ? '' : ' class="na"') + ' title="' + pct1(g.pct) + '"></span>').join('') +
+        '</div><div class="rx-tot">Porcentaje de cuadros sobre el total (' + tot.toLocaleString('es-CL') + ' cuadros) · suma 100 %</div>';
+    }
+
+    const st = doc.createElement('style');
+    st.textContent = `
+      .cmp{display:grid!important;grid-template-columns:1fr!important;gap:28px!important}
+      .cmp figure{margin:0;break-inside:avoid;page-break-inside:avoid}
+      .cmp figure img,.cmp figure .noimg{width:100%!important;height:auto;display:block;border-radius:12px}
+      .cmp .ct{font-size:14px!important;margin-bottom:8px!important}
+      .cmp figcaption{font-size:13px;margin-top:8px}
+      .rx-leg{display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center}
+      .rx-it{display:inline-flex;align-items:center;gap:7px;font-size:14px}
+      .rx-it i{width:16px;height:16px;border-radius:4px;display:inline-block}
+      .rx-it i.na,.rx-bar .na{background:repeating-linear-gradient(45deg,#bbb 0 3px,#fff 3px 6px);border:1px solid #999}
+      .rx-it em{font-style:normal;font-weight:700;color:#1a1b23}
+      .rx-bar{display:flex;height:14px;border-radius:7px;overflow:hidden;margin-top:10px;gap:2px}
+      .rx-tot{font-size:11.5px;color:#5e6e82;margin-top:6px}
+      @media print{
+        .cmp-sec{break-before:page;page-break-before:always}
+        .cmp-fig+.cmp-fig{break-before:page;page-break-before:always}
+        .cmp-sec+section{break-before:page;page-break-before:always}
+        .cmp figure img{max-height:235mm;object-fit:contain}
+      }`;
+    doc.head.appendChild(st);
+    const dt = /^\s*<!doctype/i.test(html) ? '<!DOCTYPE html>\n' : '';
+    return dt + doc.documentElement.outerHTML;
   }
 
   // ---------- Usuario de la sesión ----------
@@ -226,6 +319,10 @@
     logo();
     usuario();
     informe();
+    // Datos para los % de la prescripción, leídos justo antes de que la app arme el informe
+    document.addEventListener('click', e => {
+      if (e.target.closest && e.target.closest('#repBtn, #repBtn2, #repDl')) prepararDatosInforme();
+    }, true);
     aplicar(document.body);
     document.title = cambiar(document.title);
     obs.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ATTRS });
