@@ -1,0 +1,41 @@
+# Despliegue del backend del Prescriptor NDVI en Render (https://render.com)
+# En Render: New → Blueprint → elige este repositorio. Render lee este archivo y crea todo.
+services:
+  - type: web
+    name: prescriptor-backend
+    runtime: docker
+    plan: 0.5c-512mb          # 512 MB de RAM. Si se queda corto, súbelo a 1c-2g desde el panel.
+    region: virginia          # La más cercana a Chile entre las disponibles
+    branch: main
+    rootDir: backend          # Solo se vuelve a publicar cuando cambia algo dentro de backend/
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /salud
+    autoDeployTrigger: commit
+    disk:
+      name: datos
+      mountPath: /data        # Base de datos, imágenes y prescripciones
+      sizeGB: 10
+    envVars:
+      - key: PORT
+        value: "8000"
+      - key: SECRET_KEY
+        generateValue: true   # Render crea una clave segura automáticamente
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false           # Render te la pide al crear el servicio
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false           # Clave del asistente de IA (puedes dejarla vacía y agregarla después)
+      - key: ASSISTANT_MODEL
+        value: claude-sonnet-5-5
+      - key: ASSISTANT_DAILY_LIMIT
+        value: "40"
+      - key: CORS_ORIGINS
+        value: https://prescriptordji.github.io
+      - key: FRONTEND_URL
+        value: https://prescriptordji.github.io/prescriptor/
+      - key: MAX_UPLOAD_MB
+        value: "1024"

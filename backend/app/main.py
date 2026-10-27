@@ -9,7 +9,7 @@ from sqlalchemy import select
 from .config import get_settings
 from .db import Base, get_engine, session_factory
 from .models import User, UserStatus
-from .routers import admin, auth, fields, flights, prescriptions
+from .routers import admin, assistant, auth, fields, flights, prescriptions
 from .security import hash_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -62,7 +62,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (auth.router, admin.router, fields.router, flights.router, prescriptions.router):
+for r in (auth.router, admin.router, fields.router, flights.router, prescriptions.router, assistant.router):
     app.include_router(r)
 
 

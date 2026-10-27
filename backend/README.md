@@ -165,6 +165,34 @@ const lotes = await fetch(`${API}/lotes`, {
 
 Los mensajes de error (`detail`) vienen en español y se pueden mostrar tal cual.
 
+## Asistente de IA
+
+Ventana de chat donde cada usuario pregunta sobre sus lotes, vuelos, NDVI y prescripciones.
+Usa Claude (Anthropic) con herramientas de **solo lectura**: el asistente puede consultar los datos del
+usuario que pregunta, nunca los de otro, y no puede modificar nada.
+
+**Activarlo en el servidor:** define `ANTHROPIC_API_KEY` (se obtiene en https://platform.claude.com).
+Opcional: `ASSISTANT_MODEL` (por defecto `claude-sonnet-5-5`; `claude-haiku-5-5` es más barato) y
+`ASSISTANT_DAILY_LIMIT` (consultas por usuario al día, por defecto 40; el admin no tiene límite).
+
+**Activarlo en la página:** sube `asistente.js` junto a `index.html` y escribe la dirección del backend en
+su primera línea (`const API_URL = 'https://…'`). La versión de `index.html` que acompaña este cambio agrega
+el chat a la aplicación al momento de ingresar.
+
+| Endpoint | Para qué |
+|---|---|
+| `GET /asistente/estado` | Si está activo y cuántas consultas lleva hoy el usuario |
+| `POST /asistente/consultar` | `{"mensaje", "conversacion_id"?, "pantalla"?}` → respuesta |
+| `GET /asistente/conversaciones` | Conversaciones anteriores |
+| `GET /asistente/conversaciones/{id}` | Mensajes de una conversación |
+| `DELETE /asistente/conversaciones/{id}` | Borrarla |
+
+`pantalla` es el texto que el usuario ve en la aplicación; la ventana de chat lo envía si está marcada la
+casilla «Incluir lo que veo en pantalla», para que el asistente entienda de qué se habla.
+
+Costo aproximado: con Sonnet 5.5, alrededor de US$0,01 por consulta. Revisa el consumo en
+https://platform.claude.com y define allí un límite de gasto mensual.
+
 ## Pendientes conocidos
 
 - Las tablas se crean al arrancar. Si más adelante cambias los modelos, agrega migraciones (Alembic).

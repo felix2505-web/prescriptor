@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     smtp_tls: bool = True
     frontend_url: str = "https://prescriptordji.github.io/prescriptor/"
 
+    # Asistente de IA (Claude). Sin ANTHROPIC_API_KEY el asistente queda desactivado.
+    anthropic_api_key: str = ""
+    assistant_model: str = "claude-sonnet-5-5"
+    assistant_daily_limit: int = 40       # consultas por usuario al día (el admin no tiene límite)
+    assistant_max_tokens: int = 1500      # largo máximo de cada respuesta
+    assistant_history: int = 20           # mensajes anteriores de la conversación que se envían
+    assistant_screen_chars: int = 12000   # máximo de texto de pantalla que se envía como contexto
+    timezone: str = "America/Santiago"
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
