@@ -13,10 +13,13 @@
     { id: 'NDVI', nombre: 'NDVI · Índice de vegetación de diferencia normalizada', formula: '(NIR − Rojo) / (NIR + Rojo)' },
     { id: 'GNDVI', nombre: 'GNDVI · Índice de vegetación verde normalizado', formula: '(NIR − Verde) / (NIR + Verde)' },
     { id: 'LCI', nombre: 'LCI · Índice de clorofila de la hoja', formula: '(NIR − Red Edge) / (NIR + Rojo)' },
-    { id: 'SAVI', nombre: 'SAVI · Índice de vegetación ajustado al suelo', formula: '1,5 × (NIR − Rojo) / (NIR + Rojo + 0,5)' },
+    { id: 'OSAVI', nombre: 'OSAVI · Índice de vegetación ajustado al suelo optimizado', formula: '(NIR − Rojo) / (NIR + Rojo + 0,16)' },
   ];
   const KEY = 'presc_indice';
-  const RX = /(?<![A-Za-z0-9])(NDVI|GNDVI|LCI|SAVI)(?![A-Za-z0-9])/g;
+  // SAVI queda en la lista solo para corregir textos de una versión anterior
+  const RX = /(?<![A-Za-z0-9])(NDVI|GNDVI|LCI|OSAVI|SAVI)(?![A-Za-z0-9])/g;
+  // Solo se modifican los informes, nunca otros archivos (por ejemplo, el archivo de usuarios que descarga el admin)
+  const esInforme = h => typeof h === 'string' && /<title>Informe/.test(h);
   const ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
   const $ = id => document.getElementById(id);
   const store = {
@@ -24,13 +27,19 @@
     set(v) { try { localStorage.setItem(KEY, v); } catch (e) {} },
   };
 
-  let actual = INDICES.some(i => i.id === store.get()) ? store.get() : 'NDVI';
+  const guardado = store.get() === 'SAVI' ? 'OSAVI' : store.get();
+  let actual = INDICES.some(i => i.id === guardado) ? guardado : 'NDVI';
   const cambiar = s => (s && s.indexOf && /NDVI|LCI|SAVI/.test(s)) ? s.replace(RX, actual) : s;
 
   // ---------- Estilos ----------
   const css = document.createElement('style');
   css.textContent = `
-    #userLogoBtn, #userLogoDel { display: none !important; }
+    #userLogoBtn, #userLogoDel, #userLogoIn { display: none !important; }
+    .ses-user { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px;
+      border: 1px solid var(--line, #d5dde6); color: var(--fg, #1a1b23); font-weight: 700; font-size: 14px; white-space: nowrap;
+      max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+    .ses-user svg { width: 18px; height: 18px; flex: none; color: var(--accent, #1e88ff); }
+    .ses-user span { overflow: hidden; text-overflow: ellipsis; }
     .userlogo img { height: 54px !important; max-width: 240px !important; object-fit: contain; }
     @media (max-width: 820px) { .userlogo img { height: 40px !important; max-width: 170px !important; } }
     .idx-sel { font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit; line-height: inherit;
@@ -44,10 +53,13 @@
     .idx-sel option { color: #1a1b23; background: #fff; font-size: 15px; }`;
   document.head.appendChild(css);
 
-  // ---------- Logo incorporado ----------
+  // ---------- Logo incorporado (nadie puede subir otro) ----------
   async function logo() {
-    const box = $('userLogoBox'), img = $('userLogo');
+    const box = $('userLogoBox'), img = $('userLogo'), input = $('userLogoIn');
+    if (input) { input.disabled = true; input.remove(); }
+    try { localStorage.removeItem('presc_logo'); } catch (e) {}
     if (!box || !img) return;
+    box.hidden = true; img.removeAttribute('src');
     try {
       const r = await fetch(LOGO_URL, { cache: 'no-cache' });
       if (!r.ok) throw new Error('sin logo');
@@ -59,9 +71,24 @@
       box.hidden = false;
       const btn = $('userLogoBtn'); if (btn) btn.hidden = true;
     } catch (e) {
-      // Sin logo.png se mantiene el botón «Tu logo» como antes
-      document.querySelectorAll('#userLogoBtn').forEach(b => b.style.setProperty('display', 'inline-flex', 'important'));
+      // Sin logo.png no se muestra logo (y tampoco la opción de subir uno)
+      box.hidden = true;
     }
+  }
+
+  // ---------- Usuario de la sesión ----------
+  function usuario() {
+    const A = window.__PRESC_AUTH;
+    const nombre = A && (A.user || (A.entry && A.entry.u));
+    const ref = $('filetag');
+    if (!nombre || !ref || $('sesionUsuario')) return;
+    const el = document.createElement('div');
+    el.id = 'sesionUsuario';
+    el.className = 'ses-user';
+    el.title = 'Sesión iniciada como ' + nombre + (A.role === 'admin' ? ' (administrador)' : '');
+    el.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg><span></span>';
+    el.querySelector('span').textContent = nombre;
+    ref.after(el);
   }
 
   // ---------- Selector de índice ----------
@@ -136,7 +163,7 @@
       try {
         if (w && w.document) {
           const d = w.document, escribir = d.write.bind(d);
-          d.write = (...s) => escribir(...s.map(x => typeof x === 'string' ? cambiar(x) : x));
+          d.write = (...s) => escribir(...s.map(x => esInforme(x) ? cambiar(x) : x));
         }
       } catch (e) { /* ventana de otro sitio: no se toca */ }
       return w;
@@ -145,7 +172,7 @@
     class BlobIndice extends B {
       constructor(partes, op) {
         if (op && /^text\/html/i.test(op.type || '') && Array.isArray(partes)) {
-          partes = partes.map(x => typeof x === 'string' ? cambiar(x) : x);
+          partes = partes.map(x => esInforme(x) ? cambiar(x) : x);
         }
         super(partes, op);
       }
@@ -165,6 +192,7 @@
   function iniciar() {
     selector();
     logo();
+    usuario();
     informe();
     aplicar(document.body);
     document.title = cambiar(document.title);
