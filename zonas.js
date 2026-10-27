@@ -1,11 +1,9 @@
 /* =====================================================================
-   Prescriptor · Polígonos por zona (.zip)
-   Agrega en el paso 3b «Límite de aplicación» un botón que descarga, en un solo .zip:
-     por_tasa/  un shapefile por cada tasa (contorno de todos los cuadros de esa dosis)
-     por_area/  un shapefile por cada área dibujada o importada (con sus exclusiones como huecos)
-   Sirve para volar solo una tasa o solo un área. Todo en WGS84 (EPSG:4326).
-   Usa las exportaciones que ya tiene la plataforma («Cuadros .geojson» y «Descargar límites»),
-   sin modificar la aplicación.
+   Prescriptor · Polígonos de vuelo por mancha
+   En el paso 4 «Clases y dosis» agrega «Crear polígonos de vuelo»: separa cada tasa en sus manchas
+   (grupos continuos de cuadros) y permite descargar cada mancha como shapefile, o todas en un .zip.
+   Sirve para volar solo una mancha. Todo en WGS84 (EPSG:4326).
+   Usa la exportación «Cuadros .geojson» que ya tiene la plataforma, sin modificar la aplicación.
    ===================================================================== */
 (() => {
   if (window.__prescZonas) return;
@@ -56,20 +54,7 @@
     end.setUint32(12, cSize, true); end.setUint32(16, off, true);
     return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
   }
-  function unzip(u8) {
-    // Lee un .zip sin compresión (como los que genera la plataforma)
-    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), td = new TextDecoder(), out = {};
-    let p = 0;
-    while (p + 30 <= u8.length && dv.getUint32(p, true) === 0x04034b50) {
-      const method = dv.getUint16(p + 8, true), size = dv.getUint32(p + 18, true), nl = dv.getUint16(p + 26, true), el = dv.getUint16(p + 28, true);
-      const name = td.decode(u8.subarray(p + 30, p + 30 + nl)), start = p + 30 + nl + el;
-      if (method === 0) out[name] = u8.subarray(start, start + size);
-      p = start + size;
-    }
-    return out;
-  }
-
-  // ---------- Shapefile: escritura y lectura (polígonos, WGS84) ----------
+  // ---------- Shapefile (polígonos, WGS84) ----------
   const PRJ = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]';
   function escribirShp(base, feats, fields) {
     const recs = feats.map(f => {
@@ -127,37 +112,6 @@
       { name: base + '.dbf', data: dbf }, { name: base + '.prj', data: PRJ }, { name: base + '.cpg', data: 'UTF-8' },
     ];
   }
-  function leerShp(shpU8, dbfU8) {
-    const dv = new DataView(shpU8.buffer, shpU8.byteOffset, shpU8.byteLength), geoms = [];
-    let p = 100;
-    while (p + 8 <= shpU8.length) {
-      const len = dv.getInt32(p + 4, false) * 2, s = p + 8;
-      if (dv.getInt32(s, true) === 5) {
-        const np = dv.getInt32(s + 36, true), npt = dv.getInt32(s + 40, true), idx = [];
-        for (let k = 0; k < np; k++) idx.push(dv.getInt32(s + 44 + 4 * k, true));
-        const pts = [], b = s + 44 + 4 * np;
-        for (let k = 0; k < npt; k++) pts.push([dv.getFloat64(b + 16 * k, true), dv.getFloat64(b + 16 * k + 8, true)]);
-        geoms.push(idx.map((st, k) => pts.slice(st, k + 1 < np ? idx[k + 1] : npt)));
-      } else geoms.push([]);
-      p = s + len;
-    }
-    const recs = [];
-    if (dbfU8) {
-      const dd = new DataView(dbfU8.buffer, dbfU8.byteOffset, dbfU8.byteLength), td = new TextDecoder();
-      const n = dd.getUint32(4, true), hdr = dd.getUint16(8, true), rl = dd.getUint16(10, true), fields = [];
-      for (let o = 32; o < hdr - 1 && dbfU8[o] !== 0x0D; o += 32) {
-        let name = ''; for (let k = 0; k < 11 && dbfU8[o + k]; k++) name += String.fromCharCode(dbfU8[o + k]);
-        fields.push({ name, type: String.fromCharCode(dbfU8[o + 11]), len: dbfU8[o + 16] });
-      }
-      for (let i = 0; i < n; i++) {
-        let o = hdr + i * rl + 1; const r = {};
-        for (const f of fields) { const s = td.decode(dbfU8.subarray(o, o + f.len)).trim(); r[f.name] = f.type === 'N' ? (s === '' ? null : +s) : s; o += f.len; }
-        recs.push(r);
-      }
-    }
-    return geoms.map((g, i) => ({ rings: g, props: recs[i] || {} }));
-  }
-
   // ---------- Geometría ----------
   const area2 = r => { let a = 0; for (let i = 0, n = r.length; i < n; i++) { const [x1, y1] = r[i], [x2, y2] = r[(i + 1) % n]; a += x1 * y2 - x2 * y1; } return a / 2; };
   const cw = r => (area2(r) < 0 ? r : r.slice().reverse());
@@ -276,114 +230,192 @@
     t.textContent = msg; t.hidden = false; clearTimeout(avisoT); avisoT = setTimeout(() => { t.hidden = true; }, ms);
   }
 
-  // ---------- Exportación ----------
-  async function exportar(boton) {
+  // ---------- Manchas de cada tasa → polígonos de vuelo ----------
+  const COLORES = { 2: ['#c8402f', '#2f8a50'], 3: ['#c8402f', '#e6c13d', '#2f8a50'], 4: ['#c8402f', '#ec8d48', '#9dc85a', '#2f8a50'], 5: ['#c8402f', '#ec8d48', '#e6c13d', '#9dc85a', '#2f8a50'] };
+  const colorTasa = (t, n) => (COLORES[n] || COLORES[5])[Math.max(0, Math.min((COLORES[n] || COLORES[5]).length - 1, t - 1))];
+  const CAMPOS = [{ name: 'ZONA', type: 'C', len: 60 }, { name: 'TASA', type: 'N', len: 2 }, { name: 'DOSIS_LHA', type: 'N', len: 8, dec: 1 },
+    { name: 'MANCHA', type: 'N', len: 4 }, { name: 'CUADROS', type: 'N', len: 8 }, { name: 'AREA_HA', type: 'N', len: 14, dec: 4 }, { name: 'LITROS', type: 'N', len: 14, dec: 1 }];
+
+  let estado = null; // { base, manchas: [...], nTasas, variasAreas, bbox, desactualizado }
+
+  async function leerCuadros() {
     const gj = capturar($('geojsonBtn'));
-    if (!gj) { aviso('Primero carga el ortomosaico y define las tasas: no hay cuadros para exportar.'); return; }
-    boton.disabled = true; const txt = boton.textContent; boton.textContent = 'Generando…';
-    try {
-      const fc = JSON.parse(typeof gj === 'string' ? gj : new TextDecoder().decode(await aBytes(gj)));
-      const lim = await aBytes(capturar($('clipShp')));
-      const files = [], resumen = [], b = base();
-
-      // 1) Por tasa (y por área, si hay más de una)
-      const grupos = new Map();
-      for (const f of fc.features) {
-        const p = f.properties || {};
-        if (!p.clase) continue; // «No aplicar»
-        const key = (p.zona || '') + '\u0000' + p.clase;
-        if (!grupos.has(key)) grupos.set(key, { zona: p.zona || '', clase: p.clase, dosis: p.dosis_lha, cuadros: [] });
-        grupos.get(key).cuadros.push(f.geometry.coordinates[0]);
-      }
-      const variasAreas = new Set([...grupos.values()].map(g => g.zona)).size > 1;
-      const ordenados = [...grupos.values()].sort((a, b) => a.zona.localeCompare(b.zona) || a.clase - b.clase);
-      const camposTasa = [{ name: 'ZONA', type: 'C', len: 60 }, { name: 'TASA', type: 'N', len: 2 }, { name: 'DOSIS_LHA', type: 'N', len: 8, dec: 1 },
-        { name: 'CUADROS', type: 'N', len: 8 }, { name: 'AREA_HA', type: 'N', len: 14, dec: 4 }, { name: 'LITROS', type: 'N', len: 14, dec: 1 }];
-      for (const g of ordenados) {
-        const polys = disolver(g.cuadros);
-        const ha = polys.reduce((t, r) => t + hectareas(r), 0);
-        const nombre = b + (variasAreas ? '_' + limpio(g.zona) : '') + '_tasa' + g.clase + '_' + String(g.dosis).replace('.', ',') + 'Lha';
-        const props = { ZONA: g.zona, TASA: g.clase, DOSIS_LHA: g.dosis, CUADROS: g.cuadros.length, AREA_HA: ha, LITROS: ha * (g.dosis || 0) };
-        files.push(...escribirShp('por_tasa/' + nombre, polys.map(r => ({ rings: r, props })), camposTasa));
-        resumen.push(`por_tasa/${nombre}  ·  ${variasAreas ? g.zona + ' · ' : ''}tasa ${g.clase} · ${fmt(+g.dosis || 0, 0)} L/ha · ${fmt(ha, 2)} ha · ${polys.length} polígono${polys.length === 1 ? '' : 's'}`);
-      }
-
-      // 2) Por área dibujada (las exclusiones que caen dentro van como huecos)
-      const camposArea = [{ name: 'NOMBRE', type: 'C', len: 80 }, { name: 'ZONA', type: 'N', len: 4 }, { name: 'AREA_HA', type: 'N', len: 14, dec: 4 }];
-      let areas = [];
-      if (lim) {
-        const z = unzip(lim), shp = Object.keys(z).find(n => /\.shp$/i.test(n)), dbf = Object.keys(z).find(n => /\.dbf$/i.test(n));
-        if (shp) areas = leerShp(z[shp], dbf && z[dbf]);
-      }
-      const aplicar = areas.filter(a => String(a.props.TIPO || '').toLowerCase() !== 'excluir' && a.rings.length);
-      const excluir = areas.filter(a => String(a.props.TIPO || '').toLowerCase() === 'excluir' && a.rings.length);
-      let sinHueco = 0;
-      aplicar.forEach((a, i) => {
-        const rings = a.rings.map(r => cw(abierto(r)));
-        for (const e of excluir) for (const er of e.rings) {
-          const r = abierto(er);
-          if (rings.some(ar => r.every(p => dentro(p, ar)))) rings.push(ccw(r)); else sinHueco++;
-        }
-        const nom = a.props.NOMBRE || ('Area ' + (i + 1));
-        const ha = hectareas(rings);
-        const nombre = b + '_area' + (a.props.ZONA || i + 1) + '_' + (limpio(nom) || 'area');
-        files.push(...escribirShp('por_area/' + nombre, [{ rings, props: { NOMBRE: nom, ZONA: a.props.ZONA || i + 1, AREA_HA: ha } }], camposArea));
-        resumen.push(`por_area/${nombre}  ·  ${nom} · ${fmt(ha, 2)} ha`);
-      });
-      if (!aplicar.length) {
-        // Sin áreas dibujadas: el contorno de todo lo que se aplica
-        const todos = fc.features.filter(f => (f.properties || {}).clase).map(f => f.geometry.coordinates[0]);
-        if (todos.length) {
-          const polys = disolver(todos), ha = polys.reduce((t, r) => t + hectareas(r), 0), nombre = b + '_todo_el_pano';
-          files.push(...escribirShp('por_area/' + nombre, polys.map(r => ({ rings: r, props: { NOMBRE: 'Todo el paño', ZONA: 1, AREA_HA: ha } })), camposArea));
-          resumen.push(`por_area/${nombre}  ·  todo el paño (no hay áreas dibujadas) · ${fmt(ha, 2)} ha`);
-        }
-      }
-
-      if (!files.length) { aviso('No hay cuadros con dosis para exportar. Revisa las tasas y el límite.'); return; }
-      const leeme = [
-        'Polígonos por zona · ' + b,
-        'Generado: ' + new Date().toLocaleString('es-CL'),
-        'Sistema de coordenadas: WGS84 (EPSG:4326)',
-        '',
-        'por_tasa: contorno de los cuadros de cada tasa. Úsalo para volar solo esa dosis.',
-        'por_area: cada área a aplicar dibujada o importada; las zonas excluidas que quedan dentro van como huecos.',
-        '',
-        ...resumen,
-        ...(sinHueco ? ['', 'Atención: ' + sinHueco + ' zona(s) excluida(s) cruzan el borde de un área y no se restaron; revísalas en el control.'] : []),
-        '',
-        'En el control del Agras: copia el shapefile (.shp, .shx, .dbf, .prj) de la zona que vas a volar a la microSD e impórtalo como límite del campo.',
-        'Revisa siempre el contorno en el control antes de volar.',
-      ].join('\r\n');
-      files.push({ name: 'LEEME.txt', data: leeme });
-      const nombreZip = b + '_poligonos_por_zona.zip', blob = zip(files);
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombreZip;
-      document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-      const nt = ordenados.length, na = resumen.length - nt;
-      aviso('Descargado ' + nombreZip + ': ' + nt + ' polígono' + (nt === 1 ? '' : 's') + ' por tasa y ' + na + ' por área (WGS84).');
-    } catch (e) {
-      console.error(e);
-      aviso('No se pudieron generar los polígonos: ' + (e.message || e));
-    } finally { boton.disabled = false; boton.textContent = txt; }
+    if (!gj) return null;
+    return JSON.parse(typeof gj === 'string' ? gj : new TextDecoder().decode(await aBytes(gj)));
   }
 
-  // ---------- Botón en el paso 3b ----------
+  /* Separa cuadros en manchas: grupos de cuadros de la misma tasa que comparten un lado.
+     (Dos cuadros que solo se tocan por una esquina quedan en manchas distintas: no se puede volar por un punto.) */
+  function manchasDe(cuadros) {
+    const K = p => p[0] + ',' + p[1], lado = new Map(), padre = cuadros.map((_, i) => i);
+    const raiz = i => { while (padre[i] !== i) i = padre[i] = padre[padre[i]]; return i; };
+    cuadros.forEach((q, i) => {
+      const r = abierto(q);
+      for (let k = 0; k < r.length; k++) {
+        const a = K(r[k]), b = K(r[(k + 1) % r.length]), key = a < b ? a + '|' + b : b + '|' + a;
+        if (lado.has(key)) { const x = raiz(lado.get(key)), y = raiz(i); if (x !== y) padre[x] = y; } else lado.set(key, i);
+      }
+    });
+    const g = new Map();
+    cuadros.forEach((q, i) => { const r = raiz(i); (g.get(r) || g.set(r, []).get(r)).push(q); });
+    return [...g.values()];
+  }
+
+  async function crear() {
+    const fc = await leerCuadros();
+    if (!fc) { aviso('Primero carga el ortomosaico y define las tasas.'); return; }
+    const grupos = new Map();
+    for (const f of fc.features) {
+      const p = f.properties || {};
+      if (!p.clase) continue; // «No aplicar»
+      const key = (p.zona || '') + '\u0000' + p.clase;
+      if (!grupos.has(key)) grupos.set(key, { zona: p.zona || '', tasa: p.clase, dosis: +p.dosis_lha || 0, cuadros: [] });
+      grupos.get(key).cuadros.push(f.geometry.coordinates[0]);
+    }
+    if (!grupos.size) { aviso('No hay cuadros con dosis. Revisa las tasas y el límite.'); return; }
+    const nTasas = Math.max(...[...grupos.values()].map(g => g.tasa));
+    const variasAreas = new Set([...grupos.values()].map(g => g.zona)).size > 1;
+    const manchas = [];
+    for (const g of [...grupos.values()].sort((a, b) => a.zona.localeCompare(b.zona) || a.tasa - b.tasa)) {
+      const lista = manchasDe(g.cuadros).map(cs => {
+        const polys = disolver(cs), ha = polys.reduce((t, r) => t + hectareas(r), 0);
+        return { zona: g.zona, tasa: g.tasa, dosis: g.dosis, cuadros: cs.length, polys, ha, litros: ha * g.dosis };
+      }).sort((a, b) => b.ha - a.ha);
+      lista.forEach((m, i) => { m.n = i + 1; manchas.push(m); });
+    }
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const m of manchas) for (const p of m.polys) for (const [x, y] of p[0]) { x1 = Math.min(x1, x); y1 = Math.min(y1, y); x2 = Math.max(x2, x); y2 = Math.max(y2, y); }
+    estado = { base: base(), manchas, nTasas, variasAreas, bbox: [x1, y1, x2, y2], desactualizado: false };
+    pintar();
+  }
+
+  const nombreMancha = m => estado.base + (estado.variasAreas ? '_' + limpio(m.zona) : '') +
+    '_tasa' + m.tasa + '_' + String(m.dosis).replace('.', ',') + 'Lha_mancha' + String(m.n).padStart(2, '0');
+  const propsMancha = m => ({ ZONA: m.zona, TASA: m.tasa, DOSIS_LHA: m.dosis, MANCHA: m.n, CUADROS: m.cuadros, AREA_HA: m.ha, LITROS: m.litros });
+
+  function descargar(blob, nombre) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  }
+
+  function bajarUna(m) {
+    const nom = nombreMancha(m);
+    descargar(zip(escribirShp(nom, m.polys.map(r => ({ rings: r, props: propsMancha(m) })), CAMPOS)), nom + '.zip');
+    aviso('Descargado ' + nom + '.zip (' + fmt(m.ha, 2) + ' ha, WGS84). Impórtalo en el Agras como límite del campo.');
+  }
+
+  function visibles() {
+    const min = Math.max(0, parseFloat(($('vmMin') || {}).value) || 0);
+    return estado.manchas.filter(m => m.ha >= min);
+  }
+
+  function bajarTodas() {
+    const ms = visibles();
+    if (!ms.length) { aviso('No hay manchas para descargar con el área mínima elegida.'); return; }
+    const files = [], b = estado.base, lineas = [];
+    for (const m of ms) {
+      const nom = nombreMancha(m);
+      files.push(...escribirShp('tasa' + m.tasa + '/' + nom, m.polys.map(r => ({ rings: r, props: propsMancha(m) })), CAMPOS));
+      lineas.push(`tasa${m.tasa}/${nom}  ·  ${estado.variasAreas ? m.zona + ' · ' : ''}tasa ${m.tasa} · ${fmt(m.dosis, 0)} L/ha · mancha ${m.n} · ${fmt(m.ha, 2)} ha · ${fmt(m.litros, 1)} L`);
+    }
+    // Además, todas las manchas en un solo shapefile (un registro por mancha), para revisarlas juntas en QGIS
+    const todas = [];
+    for (const m of ms) for (const r of m.polys) todas.push({ rings: r, props: propsMancha(m) });
+    files.push(...escribirShp(b + '_todas_las_manchas', todas, CAMPOS));
+    files.push({ name: 'LEEME.txt', data: [
+      'Polígonos de vuelo por mancha · ' + b, 'Generado: ' + new Date().toLocaleString('es-CL'), 'Sistema de coordenadas: WGS84 (EPSG:4326)', '',
+      'Cada carpeta tasaN tiene un shapefile por mancha (grupo continuo de cuadros de esa tasa).',
+      b + '_todas_las_manchas tiene todas juntas, un registro por mancha, para revisarlas en un SIG.', '',
+      ...lineas, '',
+      'En el control del Agras: copia a la microSD los archivos de la mancha que vas a volar (.shp, .shx, .dbf, .prj) e impórtalos como límite del campo.',
+      'Revisa siempre el contorno en el control antes de volar.',
+    ].join('\r\n') });
+    descargar(zip(files), b + '_poligonos_de_vuelo.zip');
+    aviso('Descargadas ' + ms.length + ' manchas en ' + b + '_poligonos_de_vuelo.zip (una carpeta por tasa, WGS84).');
+  }
+
+  // Miniatura: todas las manchas en gris y la elegida con el color de su tasa
+  function miniatura(m) {
+    const [x1, y1, x2, y2] = estado.bbox, W = 64, H = 46, pad = 3;
+    const kx = Math.cos(((y1 + y2) / 2) * Math.PI / 180);
+    const sw = Math.max((x2 - x1) * kx, 1e-12), sh = Math.max(y2 - y1, 1e-12), s = Math.min((W - 2 * pad) / sw, (H - 2 * pad) / sh);
+    const ox = (W - sw * s) / 2, oy = (H - sh * s) / 2;
+    const P = r => 'M' + r.map(([x, y]) => ((x - x1) * kx * s + ox).toFixed(1) + ' ' + ((y2 - y) * s + oy).toFixed(1)).join('L') + 'Z';
+    const camino = polys => polys.map(p => p.map(P).join('')).join('');
+    const fondo = estado.manchas.filter(o => o !== m).map(o => camino(o.polys)).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true"><path d="${fondo}" fill="var(--line,#ccd)" fill-rule="evenodd" opacity=".55"/>` +
+      `<path d="${camino(m.polys)}" fill="${colorTasa(m.tasa, estado.nTasas)}" stroke="var(--fg,#1a1b23)" stroke-width=".6" fill-rule="evenodd"/></svg>`;
+  }
+
+  function pintar() {
+    const caja = $('vmLista'); if (!caja || !estado) return;
+    const ms = visibles(), ocultas = estado.manchas.length - ms.length;
+    $('vmTodas').hidden = !ms.length;
+    if (!ms.length) { caja.innerHTML = '<p class="hint">No hay manchas con el área mínima elegida.</p>'; return; }
+    const porTasa = new Map();
+    for (const m of ms) { const k = (estado.variasAreas ? m.zona + ' · ' : '') + 'Tasa ' + m.tasa; (porTasa.get(k) || porTasa.set(k, []).get(k)).push(m); }
+    let h = estado.desactualizado ? '<p class="vm-aviso">Cambiaste las tasas o el límite: vuelve a pulsar «Crear polígonos de vuelo».</p>' : '';
+    h += `<p class="hint">${ms.length} mancha${ms.length === 1 ? '' : 's'} en ${porTasa.size} grupo${porTasa.size === 1 ? '' : 's'}` + (ocultas ? ` · ${ocultas} más chica${ocultas === 1 ? '' : 's'} oculta${ocultas === 1 ? '' : 's'}` : '') + '.</p>';
+    for (const [titulo, lista] of porTasa) {
+      const m0 = lista[0], tot = lista.reduce((t, m) => t + m.ha, 0);
+      h += `<div class="vm-grupo"><div class="vm-tit"><i style="background:${colorTasa(m0.tasa, estado.nTasas)}"></i><b>${titulo}</b> · ${fmt(m0.dosis, 0)} L/ha<span>${fmt(tot, 2)} ha</span></div>`;
+      for (const m of lista) {
+        const i = estado.manchas.indexOf(m);
+        h += `<div class="vm-item">${miniatura(m)}<div class="vm-txt"><b>Mancha ${m.n}</b><small>${fmt(m.ha, 2)} ha · ${m.cuadros} cuadro${m.cuadros === 1 ? '' : 's'} · ${fmt(m.litros, 1)} L</small></div>` +
+          `<button class="btn" type="button" data-i="${i}" title="Descargar esta mancha como shapefile (.zip)">Descargar .shp</button></div>`;
+      }
+      h += '</div>';
+    }
+    caja.innerHTML = h;
+    caja.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => bajarUna(estado.manchas[+b.dataset.i]));
+  }
+
+  // ---------- Panel en el paso 4 «Clases y dosis» ----------
   function iniciar() {
-    const ref = $('clipShp') || $('clipClear');
-    const fila = ref && ref.parentElement;
-    if (!fila || $('zonasShp')) return;
-    const btn = document.createElement('button');
-    btn.type = 'button'; btn.className = 'btn'; btn.id = 'zonasShp';
-    btn.textContent = 'Polígonos por zona (.zip)';
-    btn.title = 'Un .zip con el contorno de cada tasa y de cada área, por separado, para volar solo una zona';
-    btn.onclick = () => exportar(btn);
-    fila.appendChild(btn);
-    const hint = document.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = '«Polígonos por zona» descarga el contorno de cada tasa y de cada área por separado, para volar solo una zona.';
-    fila.after(hint);
+    const metodo = $('methodSel'), sec = metodo && metodo.closest('section');
+    if (!sec || $('vmPanel')) return;
+    const css = document.createElement('style');
+    css.textContent = `
+      #vmPanel { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line, #d5dde6); display: grid; gap: 10px; }
+      #vmPanel h3 { margin: 0; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent, #1e88ff); }
+      #vmPanel .vm-fila { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+      #vmPanel .vm-fila label { flex: 1 1 120px; }
+      .vm-grupo { border: 1px solid var(--line, #d5dde6); border-radius: 12px; padding: 8px; display: grid; gap: 6px; }
+      .vm-tit { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+      .vm-tit i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+      .vm-tit span { margin-left: auto; color: var(--muted, #5e6e82); font-size: 12px; }
+      .vm-item { display: flex; align-items: center; gap: 10px; padding: 4px; border-radius: 10px; }
+      .vm-item:hover { background: color-mix(in srgb, var(--accent, #1e88ff) 8%, transparent); }
+      .vm-item svg { flex: none; border-radius: 6px; background: color-mix(in srgb, var(--fg, #000) 4%, transparent); }
+      .vm-txt { flex: 1; min-width: 0; display: grid; }
+      .vm-txt b { font-size: 13px; } .vm-txt small { color: var(--muted, #5e6e82); font-size: 11.5px; }
+      .vm-item .btn { padding: 6px 10px; font-size: 12px; }
+      .vm-aviso { margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 12.5px; background: color-mix(in srgb, #e6a23c 18%, transparent); }`;
+    document.head.appendChild(css);
+    const panel = document.createElement('div');
+    panel.id = 'vmPanel';
+    panel.innerHTML = `<h3>Polígonos de vuelo por mancha</h3>
+      <p class="hint">Crea un polígono por cada mancha de cada tasa, para volar solo esa mancha. Funciona mejor con el método «Zonificado», que forma manchas continuas.</p>
+      <div class="vm-fila">
+        <button class="btn primary" id="vmCrear" type="button">Crear polígonos de vuelo</button>
+        <label class="f"><span>Ocultar manchas menores a (ha)</span><input type="number" id="vmMin" min="0" step="0.01" value="0"></label>
+      </div>
+      <div id="vmLista"></div>
+      <div class="btns"><button class="btn" id="vmTodas" type="button" hidden>Descargar todas (.zip)</button></div>`;
+    sec.appendChild(panel);
+    $('vmCrear').onclick = async () => {
+      const b = $('vmCrear'); b.disabled = true; const t = b.textContent; b.textContent = 'Creando…';
+      try { await crear(); } catch (e) { console.error(e); aviso('No se pudieron crear los polígonos: ' + (e.message || e)); }
+      finally { b.disabled = false; b.textContent = t; }
+    };
+    $('vmTodas').onclick = () => estado && bajarTodas();
+    $('vmMin').oninput = () => estado && pintar();
+    // Si cambian las tasas, el método o el límite, la lista queda marcada como desactualizada
+    const marcar = () => { if (estado && !estado.desactualizado) { estado.desactualizado = true; pintar(); } };
+    ['ctable', 'polyList', 'legend'].forEach(id => { const el = $(id); if (el) new MutationObserver(marcar).observe(el, { childList: true, subtree: true, characterData: true }); });
+    if (metodo) metodo.addEventListener('change', marcar);
   }
   document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', iniciar) : iniciar();
 
-  window.PrescriptorZonas = { disolver, exportar: () => exportar($('zonasShp')) };
+  window.PrescriptorZonas = { disolver, manchasDe, crear, estado: () => estado };
 })();
