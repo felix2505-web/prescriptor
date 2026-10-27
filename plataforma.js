@@ -2,7 +2,7 @@
    Ajustes de la plataforma Prescriptor (se cargan sobre la app cifrada)
    - Logo de Summit Agro incorporado para todos (también en los informes); nadie puede subir otro
    - Nombre del usuario de la sesión en la barra superior
-   - Selector de índice en la barra superior: NDVI, GNDVI, LCI u OSAVI
+   - Selector de índice en la barra superior: NDVI, GNDVI, LCI, NDRE u OSAVI
    Logos: logo.png (texto blanco, para fondos oscuros) y logo-oscuro.png (texto oscuro, para fondos claros).
    ===================================================================== */
 (() => {
@@ -15,11 +15,12 @@
     { id: 'NDVI', nombre: 'NDVI · Índice de vegetación de diferencia normalizada', formula: '(NIR − Rojo) / (NIR + Rojo)' },
     { id: 'GNDVI', nombre: 'GNDVI · Índice de vegetación verde normalizado', formula: '(NIR − Verde) / (NIR + Verde)' },
     { id: 'LCI', nombre: 'LCI · Índice de clorofila de la hoja', formula: '(NIR − Red Edge) / (NIR + Rojo)' },
+    { id: 'NDRE', nombre: 'NDRE · Índice de diferencia normalizada de borde rojo', formula: '(NIR − Red Edge) / (NIR + Red Edge)' },
     { id: 'OSAVI', nombre: 'OSAVI · Índice de vegetación ajustado al suelo optimizado', formula: '(NIR − Rojo) / (NIR + Rojo + 0,16)' },
   ];
   const KEY = 'presc_indice';
   // SAVI queda en la lista solo para corregir textos de una versión anterior
-  const RX = /(?<![A-Za-z0-9])(NDVI|GNDVI|LCI|OSAVI|SAVI)(?![A-Za-z0-9])/g;
+  const RX = /(?<![A-Za-z0-9])(NDVI|GNDVI|NDRE|LCI|OSAVI|SAVI)(?![A-Za-z0-9])/g;
   // Solo se modifican los informes, nunca otros archivos (por ejemplo, el archivo de usuarios que descarga el admin)
   const esInforme = h => typeof h === 'string' && /<title>Informe/.test(h);
   const ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
@@ -31,7 +32,7 @@
 
   const guardado = store.get() === 'SAVI' ? 'OSAVI' : store.get();
   let actual = INDICES.some(i => i.id === guardado) ? guardado : 'NDVI';
-  const cambiar = s => (s && s.indexOf && /NDVI|LCI|SAVI/.test(s)) ? s.replace(RX, actual) : s;
+  const cambiar = s => (s && s.indexOf && /NDVI|NDRE|LCI|SAVI/.test(s)) ? s.replace(RX, actual) : s;
 
   // ---------- Estilos ----------
   const css = document.createElement('style');
