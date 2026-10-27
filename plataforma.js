@@ -1,14 +1,16 @@
 /* =====================================================================
    Ajustes de la plataforma Prescriptor (se cargan sobre la app cifrada)
-   - Logo de la empresa incorporado para todos (también en los informes)
-   - Selector de índice en la barra superior: NDVI, GNDVI, LCI o SAVI
-   Para cambiar el logo, reemplaza el archivo logo.png en el repositorio.
+   - Logo de Summit Agro incorporado para todos (también en los informes); nadie puede subir otro
+   - Nombre del usuario de la sesión en la barra superior
+   - Selector de índice en la barra superior: NDVI, GNDVI, LCI u OSAVI
+   Logos: logo.png (texto blanco, para fondos oscuros) y logo-oscuro.png (texto oscuro, para fondos claros).
    ===================================================================== */
 (() => {
   if (window.__prescPlataforma) return;
   window.__prescPlataforma = true;
 
-  const LOGO_URL = 'logo.png?v=1';
+  const LOGO_URL = 'logo.png?v=2';
+  const LOGO_OSCURO_URL = 'logo-oscuro.png?v=2';
   const INDICES = [
     { id: 'NDVI', nombre: 'NDVI · Índice de vegetación de diferencia normalizada', formula: '(NIR − Rojo) / (NIR + Rojo)' },
     { id: 'GNDVI', nombre: 'GNDVI · Índice de vegetación verde normalizado', formula: '(NIR − Verde) / (NIR + Verde)' },
@@ -54,26 +56,55 @@
   document.head.appendChild(css);
 
   // ---------- Logo incorporado (nadie puede subir otro) ----------
+  // logo.png tiene el texto en blanco (fondos oscuros); logo-oscuro.png lo tiene en gris oscuro (fondos claros e informes)
+  const LOGOS = { claro: null, oscuro: null };
+
+  async function comoDataURL(url) {
+    const r = await fetch(url, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('sin ' + url);
+    const blob = await r.blob();
+    return new Promise((ok, mal) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = mal; f.readAsDataURL(blob); });
+  }
+
+  // ¿La barra superior es oscura? Se mira el color del título: texto claro = fondo oscuro.
+  function barraOscura() {
+    const h1 = document.querySelector('header.top h1') || document.body;
+    const m = getComputedStyle(h1).color.match(/[\d.]+/g);
+    if (!m) return true;
+    const [r, g, b] = m.map(Number);
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 140;
+  }
+
+  function ponerLogo() {
+    const box = $('userLogoBox'), img = $('userLogo');
+    if (!box || !img) return;
+    const url = barraOscura() ? (LOGOS.claro || LOGOS.oscuro) : (LOGOS.oscuro || LOGOS.claro);
+    if (!url) { box.hidden = true; return; }
+    if (img.src !== url) img.src = url;
+    img.alt = 'Summit Agro';
+    box.hidden = false;
+  }
+
   async function logo() {
     const box = $('userLogoBox'), img = $('userLogo'), input = $('userLogoIn');
     if (input) { input.disabled = true; input.remove(); }
     try { localStorage.removeItem('presc_logo'); } catch (e) {}
     if (!box || !img) return;
     box.hidden = true; img.removeAttribute('src');
-    try {
-      const r = await fetch(LOGO_URL, { cache: 'no-cache' });
-      if (!r.ok) throw new Error('sin logo');
-      const blob = await r.blob();
-      // Como imagen incrustada, para que también salga en los informes descargados
-      const url = await new Promise((ok, mal) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = mal; f.readAsDataURL(blob); });
-      img.src = url;
-      img.alt = 'Logo';
-      box.hidden = false;
-      const btn = $('userLogoBtn'); if (btn) btn.hidden = true;
-    } catch (e) {
-      // Sin logo.png no se muestra logo (y tampoco la opción de subir uno)
-      box.hidden = true;
-    }
+    const [claro, oscuro] = await Promise.allSettled([comoDataURL(LOGO_URL), comoDataURL(LOGO_OSCURO_URL)]);
+    LOGOS.claro = claro.status === 'fulfilled' ? claro.value : null;
+    LOGOS.oscuro = oscuro.status === 'fulfilled' ? oscuro.value : null;
+    ponerLogo();
+    // Al cambiar de apariencia (o de tema claro/oscuro) se cambia la versión del logo
+    new MutationObserver(() => setTimeout(ponerLogo, 30))
+      .observe(document.documentElement, { attributes: true, attributeFilter: ['data-skin', 'data-theme', 'class'] });
+  }
+
+  // Informe: siempre fondo blanco, así que lleva el logo con texto oscuro
+  function prepararInforme(h) {
+    h = cambiar(h);
+    if (LOGOS.claro && LOGOS.oscuro) h = h.split(LOGOS.claro).join(LOGOS.oscuro);
+    return h;
   }
 
   // ---------- Usuario de la sesión ----------
@@ -163,7 +194,7 @@
       try {
         if (w && w.document) {
           const d = w.document, escribir = d.write.bind(d);
-          d.write = (...s) => escribir(...s.map(x => esInforme(x) ? cambiar(x) : x));
+          d.write = (...s) => escribir(...s.map(x => esInforme(x) ? prepararInforme(x) : x));
         }
       } catch (e) { /* ventana de otro sitio: no se toca */ }
       return w;
@@ -172,7 +203,7 @@
     class BlobIndice extends B {
       constructor(partes, op) {
         if (op && /^text\/html/i.test(op.type || '') && Array.isArray(partes)) {
-          partes = partes.map(x => esInforme(x) ? cambiar(x) : x);
+          partes = partes.map(x => esInforme(x) ? prepararInforme(x) : x);
         }
         super(partes, op);
       }
